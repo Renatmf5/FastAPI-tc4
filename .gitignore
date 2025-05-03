@@ -1,0 +1,27 @@
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+virtualEnv/
+data/
+authDB.db
+virtualEnv/
+
+# Spyder project settings
+.spyderproject
+.spyproject
