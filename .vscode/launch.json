@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+      {
+          "name": "Python: FastAPI",
+          "type": "python",
+          "request": "launch",
+          "program": "${workspaceFolder}/main.py",
+          "python": "${workspaceFolder}/venv/bin/python", // Atualize este caminho conforme necessário
+          "env": {
+            "PYTHONPATH": "${workspaceFolder}"
+            },
+          "console": "integratedTerminal"
+      }
+  ]
+}
