@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import yfinance as yf
 from datetime import datetime, timedelta
-from aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
+from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
 
@@ -83,7 +83,7 @@ class DataAnalitcsHandler:
         """
         # Definir período de 60 dias
         end_date = datetime.today()
-        start_date = end_date - timedelta(days=450)
+        start_date = end_date - timedelta(days=500)
         start_date_str = start_date.strftime("%d/%m/%Y")
         end_date_str = end_date.strftime("%d/%m/%Y")
 
@@ -282,11 +282,11 @@ class DataAnalitcsHandler:
         calcula_indicadores_contabeis()
     
         # Aplicar a função para cada grupo de 'ticker'
-        self.df_dados = self.df_dados.groupby('ticker', group_keys=False).apply(calcula_signal_target)
+        #self.df_dados = self.df_dados.groupby('ticker', group_keys=False).apply(calcula_signal_target)
         
         # Remover a coluna temporária 'preco_fechamento_futuro'
         print('passei aqui')
-        self.df_dados = self.df_dados.drop(columns=['preco_fechamento_futuro'])
+        #self.df_dados = self.df_dados.drop(columns=['preco_fechamento_futuro'])
         
         self.df_dados = self.df_dados.groupby('ticker', group_keys=False).apply(lambda x: x.tail(21))
 
@@ -351,18 +351,25 @@ class DataAnalitcsHandler:
             print(lstm_scaler.feature_names_in_)
             preco_fechamento_ajustado = df_com_indicadores['preco_fechamento_ajustado'].values[-1]
             df_com_indicadores = df_com_indicadores[lstm_scaler.feature_names_in_]
+            df_com_indicadores.fillna(method='ffill', inplace=True)
+            df_com_indicadores.fillna(method='bfill', inplace=True)
 
             # Escalar os dados
             scaled_data = lstm_scaler.transform(df_com_indicadores)
             # Redimensionar os dados para [batch_size, time_steps, features]
             scaled_data = scaled_data.reshape(1, scaled_data.shape[0], scaled_data.shape[1])
         
-
-
             # Fazer predições
             lstm_classification = model_classification.predict(scaled_data)
             lstm_classification = (lstm_classification > 0.5).astype(int).flatten()
             lstm_regression = model_regressor.predict(scaled_data).flatten()
+            
+            # Ajustar valores muito próximos de zero em lstm_regression[0]
+            if 0.0 <= lstm_regression[0] < 0.1:
+                lstm_regression[0] = 0.1  # Ajustar para 0.1% se for positivo e próximo de zero
+            elif -0.1 < lstm_regression[0] < 0.0:
+                lstm_regression[0] = -0.1  # Ajustar para -0.1% se for negativo e próximo de zero
+
 
             # Preparar o retorno em JSON
             predictions = []
@@ -370,8 +377,9 @@ class DataAnalitcsHandler:
                 "data": datetime.today().strftime("%d/%m/%Y"),  # Data atual no formato dia/mês/ano
                 "target": preco_fechamento_ajustado.round(2),
                 "classificacao": "Compra" if int(lstm_classification[0]) == 1 else "Venda",
-                "variacao": f"{round(float(lstm_regression[0]), 2)}%"
+                "variacao": f"{round(float(lstm_regression[0]), 2)}"
             })
+            print(predictions[0])
 
             # Retornar o JSON com o ticker como chave
             return {
