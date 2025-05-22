@@ -48,6 +48,7 @@ class DataAnalitcsHandler:
                 print(f"Sem dados para {ticker}")
                 return pd.DataFrame()  # Retorna um DataFrame vazio
 
+
             # Resetar o índice
             df_ticker = df_ticker.reset_index()
 
