@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
+from curl_cffi import requests
 import yfinance as yf
 from datetime import datetime, timedelta
 from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
@@ -38,8 +38,10 @@ class DataAnalitcsHandler:
         Consulta os dados de cotação de um ticker no Yahoo Finance.
         """
         try:
+            # Configurar o agente de usuário globalmente no yfinance
+            session = requests.Session(impersonate=False)
             print(f"Buscando dados para o ticker: {ticker}")
-            df_ticker = yf.download(ticker,auto_adjust=False, start=start_date, end=end_date)
+            df_ticker = yf.download(ticker,auto_adjust=False, start=start_date, end=end_date, session=session)
 
             # Verificar se o DataFrame está vazio
             if df_ticker.empty:
@@ -86,7 +88,7 @@ class DataAnalitcsHandler:
         start_date = end_date - timedelta(days=500)
         start_date_str = start_date.strftime("%d/%m/%Y")
         end_date_str = end_date.strftime("%d/%m/%Y")
-
+        #yf.utils.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         # Buscar dados da ação
         cotacoes_acao = self.get_yahoo_finance_data(self.ticker, start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d"))
 
@@ -405,6 +407,5 @@ if __name__ == "__main__":
         }
     handler = DataAnalitcsHandler(ticker="AZUL4.SA", **dicionario_indicadores)
     resultado = handler.gera_prediction()
-
 
 """
