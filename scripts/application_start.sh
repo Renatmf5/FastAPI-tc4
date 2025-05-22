@@ -16,15 +16,23 @@ cd ${DIR}
 # Definir variável de ambiente
 export ENV=production
 
-# Verificar se o uvicorn está no PATH
-echo "Verificando se o uvicorn está no PATH" | tee -a /home/ec2-user/fastapi-app/deploy.log
-which uvicorn | tee -a /home/ec2-user/fastapi-app/deploy.log
+# Construir a imagem Docker
+echo "Construindo a imagem Docker" | tee -a ${DIR}/deploy.log
+sudo docker build -t fastapi-app . | tee -a ${DIR}/deploy.log
+
+# Parar e remover contêineres antigos
+echo "Parando e removendo contêineres antigos" | tee -a ${DIR}/deploy.log
+sudo docker stop fastapi-container || true
+sudo docker rm fastapi-container || true
 
 # Aplicar setcap ao binário do Python
 PYTHON_BIN=$(readlink -f $(which python3))
 sudo setcap 'cap_net_bind_service=+ep' $PYTHON_BIN
 echo "Permissões setcap aplicadas ao Python" | tee -a /home/ec2-user/fastapi-app/deploy.log
+# Iniciar o contêiner Docker
+echo "Iniciando o contêiner Docker" | tee -a ${DIR}/deploy.log
+sudo docker run -d --name fastapi-container -p 80:80 fastapi-app | tee -a ${DIR}/deploy.log
 
-# Executar o comando uvicorn para iniciar a aplicação FastAPI em segundo plano e redirecionar a saída para um arquivo de log
-nohup uvicorn main:app --host 0.0.0.0 --port 80 > app.log 2>&1 &
-echo "Comando uvicorn executado" | tee -a /home/ec2-user/fastapi-app/deploy.log
+echo "Aplicação iniciada com sucesso no contêiner Docker" | tee -a ${DIR}/deploy.log
+
+
