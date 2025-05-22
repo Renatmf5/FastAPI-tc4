@@ -41,7 +41,7 @@ class DataAnalitcsHandler:
             # Configurar o agente de usuário globalmente no yfinance
             session = requests.Session(impersonate=False)
             print(f"Buscando dados para o ticker: {ticker}")
-            df_ticker = yf.download(ticker, auto_adjust=False, start=start_date, end=end_date)
+            df_ticker = yf.download(ticker, auto_adjust=False, start=start_date, end=end_date, session=session)
 
             # Verificar se o DataFrame está vazio
             if df_ticker.empty:
