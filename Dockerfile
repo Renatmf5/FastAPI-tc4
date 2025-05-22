@@ -22,5 +22,6 @@ RUN apt-get update && apt-get install -y libcap2-bin && \
 # Expor a porta 80 para o host
 EXPOSE 80
 
+ENV S3_BUCKET_NAME=models-bucket-tc4
 # Comando para iniciar o servidor FastAPI
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
