@@ -32,6 +32,6 @@ if __name__ == "__main__":
     import uvicorn
     env = os.getenv("ENV", "development")
     if env == "production":
-        uvicorn.run("main:app", host="0.0.0.0", port=80, log_level=settings.LOG_LEVEL)
+        uvicorn.run("main:app", host="0.0.0.0", port=80, log_level=settings.LOG_LEVEL, workers=1)
     else:
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, log_level=settings.LOG_LEVEL, reload=True)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, log_level=settings.LOG_LEVEL, reload=True, workers=1)

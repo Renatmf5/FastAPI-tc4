@@ -1,13 +1,15 @@
 import os
 import boto3
+from curl_cffi import requests
 import pandas as pd
 import numpy as np
-from curl_cffi import requests
 import yfinance as yf
 from datetime import datetime, timedelta
 from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
+import socket
+
 
 class DataAnalitcsHandler:
     
@@ -39,16 +41,22 @@ class DataAnalitcsHandler:
         Consulta os dados de cotação de um ticker no Yahoo Finance.
         """
         try:
-            # Criar o objeto Ticker
-            ticker_obj = yf.Ticker(ticker)
+            print(f"Analisando a variável 'ticker': valor={repr(ticker)}, tipo={type(ticker)}")
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
+            session = requests.Session()
+            session.headers.update(headers)
+
+            ticker_obj = yf.Ticker(ticker, session=session)
             
             # Buscar o histórico de preços
             df_ticker = ticker_obj.history(start=start_date, end=end_date, auto_adjust=False)
             # Configurar o agente de usuário globalmente no yfinance
             #session = requests.Session(impersonate=False)
             #print(f"Buscando dados para o ticker: {ticker}")
-            #df_ticker = yf.download(ticker, auto_adjust=False, start=start_date, end=end_date, session=session)
-
+            df_ticker = yf.download(tickers=ticker,start=start_date,end=end_date,auto_adjust=False,progress=False,threads=True)
             # Verificar se o DataFrame está vazio
             if df_ticker.empty:
                 print(f"Sem dados para {ticker}")

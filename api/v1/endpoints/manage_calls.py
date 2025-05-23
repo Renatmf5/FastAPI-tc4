@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from api.utils.data_handler import DataAnalitcsHandler
 import boto3
+from fastapi.concurrency import run_in_threadpool
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -27,7 +28,8 @@ async def get_predict_by_ticker(ticker: str):
             }
         }
         handler = DataAnalitcsHandler(ticker=f'{ticker}.SA', **dicionario_indicadores)
-        resultado = handler.gera_prediction()
+        # Executar a função bloqueante em uma thread separada
+        resultado = await run_in_threadpool(handler.gera_prediction)
 
         return JSONResponse(content=resultado, media_type="application/json")
     except Exception as e:
