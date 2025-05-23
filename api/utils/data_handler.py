@@ -1,6 +1,7 @@
 import os
 import boto3
-from curl_cffi import requests
+from curl_cffi import requests as curl_cffi_request
+import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -9,6 +10,7 @@ from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, bus
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
 import socket
+pd.set_option('future.no_silent_downcasting', True)
 
 
 class DataAnalitcsHandler:
@@ -46,7 +48,7 @@ class DataAnalitcsHandler:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             }
-            session = requests.Session()
+            session = curl_cffi_request.Session()
             session.headers.update(headers)
 
             ticker_obj = yf.Ticker(ticker, session=session)
@@ -133,7 +135,18 @@ class DataAnalitcsHandler:
             print(f"Erro ao buscar {ticker}: {e}")
             return pd.DataFrame() 
 
+    
+    
     def cria_data_frame(self):
+        def otimizar_tipos(df):
+            """
+            Otimiza os tipos de dados de um DataFrame para reduzir o consumo de memória.
+            """
+            for col in df.select_dtypes(include=['float64']).columns:
+                df.loc[:, col] = df[col].astype('float32')
+            for col in df.select_dtypes(include=['int64']).columns:
+                df.loc[:, col] = df[col].astype('int32')
+            return df
         """
         Cria um DataFrame com os dados de cotação da ação especificada, IBOV e CDI.
         """
@@ -169,6 +182,8 @@ class DataAnalitcsHandler:
             'open', 'volume', 'pct_ibov', 'fechamento_ibov', 'retorno_cdi'
         ]]
 
+        self.df_dados = otimizar_tipos(self.df_dados)
+        
         return self.df_dados
     # Garantir que o DataFrame esteja ordenado por 'data' dentro de cada 'ticker'
     
@@ -185,32 +200,15 @@ class DataAnalitcsHandler:
         if indicador not in self.df_dados.columns:
             raise Exception(f"O indicador '{indicador}' não existe no DataFrame.")
 
-        # Calcular a variação percentual
-        self.df_dados[coluna_variacao] = self.df_dados.groupby('ticker')[indicador].pct_change()
-
-        # Substituir valores 0.0 por NaN
-        self.df_dados[coluna_variacao] = self.df_dados[coluna_variacao].replace(0.0, pd.NA)
-
-        # Preencher valores NaN com o método forward fill dentro de cada grupo
-        self.df_dados[coluna_variacao] = self.df_dados.groupby('ticker')[coluna_variacao].fillna(method='ffill') 
+        grupo = self.df_dados.groupby('ticker', group_keys=False)
+        self.df_dados[coluna_variacao] = grupo[indicador].pct_change(fill_method=None)
+        self.df_dados.loc[self.df_dados[coluna_variacao] == 0.0, coluna_variacao] = pd.NA
+        self.df_dados[coluna_variacao] = grupo[coluna_variacao].ffill()
 
     def adicionar_indicadores(self):
         # Verificar se o DataFrame `df_dados` foi criado
         if not hasattr(self, 'df_dados') or self.df_dados.empty:
             raise Exception("O DataFrame `df_dados` não foi criado. Execute `cria_data_frame` primeiro.")
-
-         # Função para calcular 'signal' e 'target' para cada grupo de 'ticker'
-        def calcula_signal_target(grupo):
-            # Deslocar o preço de fechamento ajustado em 21 dias (1 mês útil)
-            grupo['preco_fechamento_futuro'] = grupo['preco_fechamento_ajustado'].shift(-1)
-
-            # Calcular a coluna 'signal'
-            grupo['signal'] = (grupo['preco_fechamento_futuro'] > grupo['preco_fechamento_ajustado']).astype(int)
-
-            # Calcular a coluna 'target' como a variação percentual
-            grupo['target'] = ((grupo['preco_fechamento_futuro'] - grupo['preco_fechamento_ajustado']) / grupo['preco_fechamento_ajustado']) * 100
-
-            return grupo
         
         def calcula_indicadores_tecnicos():
             # Cálculo do RSI
@@ -236,17 +234,17 @@ class DataAnalitcsHandler:
                 raise Exception("Os dados necessários para calcular o Beta não estão disponíveis no DataFrame.")
 
             # Calcular os retornos do ticker
-            self.df_dados['retorno_ticker'] = self.df_dados.groupby('ticker')['preco_fechamento_ajustado'].pct_change()
+            grupo = self.df_dados.groupby('ticker', group_keys=False)
+            self.df_dados['retorno_ticker'] = grupo['preco_fechamento_ajustado'].ffill().pct_change()
 
-            # Tratar valores inválidos
-            self.df_dados.loc[self.df_dados['retorno_ticker'] == 0, 'retorno_ticker'] = pd.NA
-            self.df_dados.loc[self.df_dados['retorno_ticker'] == np.inf, 'retorno_ticker'] = pd.NA
+            # Tratar valores inválidos diretamente
+            self.df_dados.loc[self.df_dados['retorno_ticker'].isin([0, np.inf]), 'retorno_ticker'] = pd.NA
+            
+            # Garantir que todos os valores de retorno_ticker sejam preenchidos com ffill
+            self.df_dados['retorno_ticker'] = grupo['retorno_ticker'].ffill()
 
             # Filtrar apenas as colunas necessárias
-            df_beta = self.df_dados[['data', 'ticker', 'retorno_ticker', 'pct_ibov']].dropna()
-
-            # Garantir que os dados estejam ordenados por data
-            df_beta = df_beta.sort_values(by=['ticker', 'data'])
+            df_beta = self.df_dados[['data', 'ticker', 'retorno_ticker', 'pct_ibov']].dropna().sort_values(by=['ticker', 'data'])
 
             # Lista para armazenar os betas calculados
             lista_betas = []
@@ -270,20 +268,21 @@ class DataAnalitcsHandler:
 
             # Concatenar os resultados
             if lista_betas:
-                df_betas = pd.concat(lista_betas)
+                df_betas = pd.concat(lista_betas, ignore_index=True)
 
                 # Fazer o merge com o DataFrame principal
                 self.df_dados = pd.merge(self.df_dados, df_betas, on=['data', 'ticker'], how='left')
             
-             # Calcular a variação do beta_252
-            self.df_dados['beta_252_variacao'] = self.df_dados.groupby('ticker')['beta_252'].pct_change()
+            # Calcular a variação do beta_252
+            grupo = self.df_dados.groupby('ticker', group_keys=False)
+            self.df_dados['beta_252_variacao'] = grupo['beta_252'].ffill().pct_change()
 
-            # Substituir valores 0.0 por NaN
-            self.df_dados['beta_252_variacao'] = self.df_dados['beta_252_variacao'].replace(0.0, pd.NA)
-
-            # Preencher valores NaN com o método forward fill dentro de cada grupo
-            self.df_dados['beta_252_variacao'] = self.df_dados.groupby('ticker')['beta_252_variacao'].fillna(method='ffill')
-        
+            # Substituir valores 0.0 por NaN e preencher valores NaN com forward fill
+            self.df_dados['beta_252_variacao'] = (self.df_dados['beta_252_variacao']
+                .replace(0.0, pd.NA)
+                .groupby(self.df_dados['ticker'])
+                .ffill()
+            )
         def calcula_indicadores_contabeis():
             """
             Função para calcular indicadores contábeis.
@@ -301,6 +300,10 @@ class DataAnalitcsHandler:
                         lendo_indicador['data'] = pd.to_datetime(lendo_indicador['data'])
                         lendo_indicador['ticker'] = lendo_indicador['ticker'].astype(str)
                         lendo_indicador['valor'] = lendo_indicador['valor'].astype(float)
+                        
+                        # Filtrar apenas os últimos 2 anos de dados
+                        dois_anos_atras = pd.Timestamp.now() - pd.DateOffset(years=2)
+                        lendo_indicador = lendo_indicador[lendo_indicador['data'] >= dois_anos_atras]
 
                         # Filtrar apenas os indicadores para os tickers presentes em self.df_dados
                         tickers_presentes = self.df_dados['ticker'].unique()
@@ -309,17 +312,17 @@ class DataAnalitcsHandler:
                         # Calcular a variação entre trimestres
                         lendo_indicador['variacao'] = lendo_indicador.groupby('ticker')['valor'].pct_change()
                         lendo_indicador['variacao'] = lendo_indicador['variacao'].replace(0.0, pd.NA)
-                        lendo_indicador['variacao'] = lendo_indicador.groupby('ticker')['variacao'].fillna(method='ffill')
+                        
+                        lendo_indicador['variacao'] = lendo_indicador.groupby('ticker')['variacao'].ffill()
 
                         # Selecionar as colunas finais
                         lendo_indicador = lendo_indicador[['data', 'ticker', 'valor', 'variacao']]
                         lendo_indicador.columns = ['data', 'ticker', indicador, f'{indicador}_variacao']
 
                         # Realizar o merge_asof com o DataFrame existente
-                        self.df_dados['data'] = pd.to_datetime(self.df_dados['data'])
-                        self.df_dados = self.df_dados.sort_values(by=['ticker', 'data'])
-                        lendo_indicador = lendo_indicador.sort_values(by=['ticker', 'data'])
-                        # Realizar o merge_asof com o DataFrame existente
+                        self.df_dados['data'] = pd.to_datetime(self.df_dados['data'], errors='coerce')
+                        self.df_dados.sort_values(by=['ticker', 'data'], inplace=True)
+                        lendo_indicador.sort_values(by=['ticker', 'data'], inplace=True)
                         self.df_dados = pd.merge_asof(
                             self.df_dados,
                             lendo_indicador,
@@ -406,10 +409,7 @@ class DataAnalitcsHandler:
             
             print(lstm_scaler.feature_names_in_)
             preco_fechamento_ajustado = df_com_indicadores['preco_fechamento_ajustado'].values[-1]
-            df_com_indicadores = df_com_indicadores[lstm_scaler.feature_names_in_]
-            df_com_indicadores.fillna(method='ffill', inplace=True)
-            df_com_indicadores.fillna(method='bfill', inplace=True)
-
+            df_com_indicadores = df_com_indicadores[lstm_scaler.feature_names_in_].ffill().bfill()
             # Escalar os dados
             scaled_data = lstm_scaler.transform(df_com_indicadores)
             # Redimensionar os dados para [batch_size, time_steps, features]
