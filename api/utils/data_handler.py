@@ -5,7 +5,7 @@ import numpy as np
 from curl_cffi import requests
 import yfinance as yf
 from datetime import datetime, timedelta
-from aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
+from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
 
