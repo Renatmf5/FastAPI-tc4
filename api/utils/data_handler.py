@@ -1,10 +1,11 @@
 import os
+import boto3
 import pandas as pd
 import numpy as np
 from curl_cffi import requests
 import yfinance as yf
 from datetime import datetime, timedelta
-from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
+from aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
 
@@ -38,15 +39,59 @@ class DataAnalitcsHandler:
         Consulta os dados de cotação de um ticker no Yahoo Finance.
         """
         try:
+            # Criar o objeto Ticker
+            ticker_obj = yf.Ticker(ticker)
+            
+            # Buscar o histórico de preços
+            df_ticker = ticker_obj.history(start=start_date, end=end_date, auto_adjust=False)
             # Configurar o agente de usuário globalmente no yfinance
-            session = requests.Session(impersonate="edge99")
-            print(f"Buscando dados para o ticker: {ticker}")
-            df_ticker = yf.download(ticker, auto_adjust=False, start=start_date, end=end_date, session=session)
+            #session = requests.Session(impersonate=False)
+            #print(f"Buscando dados para o ticker: {ticker}")
+            #df_ticker = yf.download(ticker, auto_adjust=False, start=start_date, end=end_date, session=session)
 
             # Verificar se o DataFrame está vazio
             if df_ticker.empty:
                 print(f"Sem dados para {ticker}")
-                return pd.DataFrame()  # Retorna um DataFrame vazio
+                if ticker != "^BVSP":
+                    print("Carregando dados do S3...")
+                    # Inicializar o cliente S3
+                    s3_client = boto3.client('s3')
+                    bucket_name = "datalake-tc4"
+                    file_key = "acoes_cotacoes.parquet"
+
+                    # Baixar o arquivo do S3
+                    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                    df_s3 = pd.read_parquet(response['Body'])
+
+                    # Filtrar os dados pelo ticker
+                    df_ticker = df_s3[df_s3['ticker'] == ticker]
+
+                    # Ordenar pela data mais recente e pegar os últimos 300 registros
+                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(300)
+
+                    # Verificar se ainda está vazio após o filtro
+                    if df_ticker.empty:
+                        print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
+                        return pd.DataFrame()  # Retorna um DataFrame vazio
+                    
+                elif ticker == "^BVSP":
+                    print("Carregando dados do S3...")
+                    # Inicializar o cliente S3
+                    s3_client = boto3.client('s3')
+                    bucket_name = "datalake-tc4"
+                    file_key = "IBOV.parquet"
+
+                    # Baixar o arquivo do S3
+                    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                    df_s3 = pd.read_parquet(response['Body'])
+
+                    # Ordenar pela data mais recente e pegar os últimos 300 registros
+                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(300)
+
+                    # Verificar se ainda está vazio após o filtro
+                    if df_ticker.empty:
+                        print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
+                        return pd.DataFrame()  # Retorna um DataFrame vazio
 
 
             # Resetar o índice
@@ -395,7 +440,7 @@ class DataAnalitcsHandler:
                 "error": str(e)
             }
 
-"""
+
 if __name__ == "__main__":
     dicionario_indicadores = {
             'indicadores': {
@@ -409,4 +454,4 @@ if __name__ == "__main__":
     handler = DataAnalitcsHandler(ticker="AZUL4.SA", **dicionario_indicadores)
     resultado = handler.gera_prediction()
 
-"""
+
