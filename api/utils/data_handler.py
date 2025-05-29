@@ -48,7 +48,7 @@ class DataAnalitcsHandler:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             }
-            session = curl_cffi_request.Session()
+            session = curl_cffi_request.Session(impersonate=False)
             session.headers.update(headers)
 
             ticker_obj = yf.Ticker(ticker, session=session)
