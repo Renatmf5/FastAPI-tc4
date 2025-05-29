@@ -8,9 +8,14 @@ WORKDIR /app
 COPY . /app
 
 # Instalar dependências do sistema (se necessário)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    libcurl4-openssl-dev \
+    libssl-dev \
+    ca-certificates \
+    python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 
 # Instalar as dependências do Python
 RUN pip install --no-cache-dir -r requirements.txt

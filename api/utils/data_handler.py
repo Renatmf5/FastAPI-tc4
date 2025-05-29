@@ -44,12 +44,13 @@ class DataAnalitcsHandler:
         """
         try:
             print(f"Analisando a variável 'ticker': valor={repr(ticker)}, tipo={type(ticker)}")
-            
+            session = curl_cffi_request.Session(impersonate="chrome110")
+            """
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             }
-            session = curl_cffi_request.Session(impersonate=False)
             session.headers.update(headers)
+            """
 
             ticker_obj = yf.Ticker(ticker, session=session)
             
