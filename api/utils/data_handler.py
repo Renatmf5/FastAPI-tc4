@@ -46,88 +46,82 @@ class DataAnalitcsHandler:
         """
         try:
             print(f"Analisando a variável 'ticker': valor={repr(ticker)}, tipo={type(ticker)}")
-            """
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            }
-            session.headers.update(headers)
-            """
 
+            # Buscar o histórico de preços usando yfinance
             ticker_obj = yf.Ticker(ticker, session=session)
-            
-            # Buscar o histórico de preços
             df_ticker = ticker_obj.history(start=start_date, end=end_date, auto_adjust=False)
-            # Configurar o agente de usuário globalmente no yfinance
-            #session = requests.Session(impersonate=False)
-            #print(f"Buscando dados para o ticker: {ticker}")
-            df_ticker = yf.download(tickers=ticker,start=start_date,end=end_date,auto_adjust=False,progress=False,threads=True)
-            #df_ticker = self.get_data_with_retry(ticker_str=ticker, start_date=start_date, end_date=end_date)
-            # Verificar se o DataFrame está vazio
 
-            # Verificar novamente se o DataFrame está vazio
+            # Caso o DataFrame esteja vazio, tentar outra abordagem
             if df_ticker.empty:
-                print("Carregando dados do S3 devido ao erro de limite de requisições...")
+                print("Tentando buscar dados com yf.download...")
+                df_ticker = yf.download(tickers=ticker, start=start_date, end=end_date, auto_adjust=False, progress=False, threads=True)
 
-                # Inicializar o cliente S3
-                s3_client = boto3.client('s3')
-                bucket_name = "datalake-tc4"
+        except Exception as e:
+            print(f"Erro ao buscar dados com ticker_obj.history: {e}")
+            df_ticker = pd.DataFrame()  # Define df_ticker como vazio para continuar a execução
 
-                # Escolher o arquivo correto com base no ticker
-                file_key = "acoes_cotacoes.parquet" if ticker != "^BVSP" else "IBOV.parquet"
+        # Verificar novamente se o DataFrame está vazio
+        if df_ticker.empty:
+            print("Carregando dados do S3 devido ao erro de limite de requisições...")
 
-                # Baixar o arquivo do S3
-                response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-                parquet_file = io.BytesIO(response['Body'].read())
-                df_s3 = pd.read_parquet(parquet_file)
+            # Inicializar o cliente S3
+            s3_client = boto3.client('s3')
+            bucket_name = "datalake-tc4"
 
-                # Filtrar os dados pelo ticker
-                if ticker != "^BVSP":
-                    # Remover '.SA' do ticker para comparação
-                    ticker_formatado = ticker.replace('.SA', '')
-                    df_ticker = df_s3[df_s3['ticker'] == ticker_formatado]
-                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(500)
-                    df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
-                                            'close', 'high', 'low', 'open', 'volume']]
-                else:
-                    df_ticker = df_s3.sort_values(by='data', ascending=False).head(500)
+            # Escolher o arquivo correto com base no ticker
+            file_key = "acoes_cotacoes.parquet" if ticker != "^BVSP" else "IBOV.parquet"
 
-                # Ordenar os dados em ordem ascendente
-                df_ticker = df_ticker.sort_values(by='data', ascending=True).head(500)
+            # Baixar o arquivo do S3
+            response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+            parquet_file = io.BytesIO(response['Body'].read())
+            df_s3 = pd.read_parquet(parquet_file)
 
-                # Verificar se ainda está vazio após o filtro
-                if df_ticker.empty:
-                    print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
-                    return pd.DataFrame()  # Retorna um DataFrame vazio
+            # Filtrar os dados pelo ticker
+            if ticker != "^BVSP":
+                # Remover '.SA' do ticker para comparação
+                ticker_formatado = ticker.replace('.SA', '')
+                df_ticker = df_s3[df_s3['ticker'] == ticker_formatado]
+                df_ticker = df_ticker.sort_values(by='data', ascending=False).head(500)
+                df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
+                                        'close', 'high', 'low', 'open', 'volume']]
+                # Resetar o índice
+                df_ticker = df_ticker.reset_index()
 
-            # Resetar o índice
-            df_ticker = df_ticker.reset_index()
+                # Tratar MultiIndex, se presente
+                if isinstance(df_ticker.columns, pd.MultiIndex):
+                    df_ticker.columns = df_ticker.columns.get_level_values(0)
 
-            # Tratar MultiIndex, se presente
-            if isinstance(df_ticker.columns, pd.MultiIndex):
-                df_ticker.columns = df_ticker.columns.get_level_values(0)
+                # Renomear colunas
+                df_ticker = df_ticker.rename(columns={
+                    'Date': 'data',
+                    'Adj Close': 'preco_fechamento_ajustado',
+                    'Close': 'close',
+                    'High': 'high',
+                    'Low': 'low',
+                    'Open': 'open',
+                    'Volume': 'volume'
+                })
 
-            # Renomear colunas
-            df_ticker = df_ticker.rename(columns={
-                'Date': 'data',
-                'Adj Close': 'preco_fechamento_ajustado',
-                'Close': 'close',
-                'High': 'high',
-                'Low': 'low',
-                'Open': 'open',
-                'Volume': 'volume'
-            })
+                # Adicionar o ticker como coluna
+                df_ticker['ticker'] = ticker
 
-            # Adicionar o ticker como coluna
-            df_ticker['ticker'] = ticker
+                # Selecionar as colunas finais
+                df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
+                                    'close', 'high', 'low', 'open', 'volume']]
+            else:
+                df_ticker = df_s3.sort_values(by='data', ascending=False).head(500)
 
-            # Selecionar as colunas finais
-            df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
-                                'close', 'high', 'low', 'open', 'volume']]
+            # Ordenar os dados em ordem ascendente
+            df_ticker = df_ticker.sort_values(by='data', ascending=True).head(500)
 
-            return df_ticker
+            # Verificar se ainda está vazio após o filtro
+            if df_ticker.empty:
+                print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
+                return pd.DataFrame()  # Retorna um DataFrame vazio
 
-        except ValueError as e:
-            print(f"Erro ao buscar {ticker}: {e}")
+        
+
+        return df_ticker
             
   
     def cria_data_frame(self):
