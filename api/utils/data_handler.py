@@ -1,6 +1,6 @@
-import os
+import io
 import boto3
-from curl_cffi import requests as curl_cffi_request
+from core.services import session
 import requests
 import pandas as pd
 import numpy as np
@@ -9,8 +9,9 @@ from datetime import datetime, timedelta
 from .aws_functions import buscar_modelo_no_s3, ler_parametros_scaler_do_s3, buscar_indicador
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
-import socket
+
 pd.set_option('future.no_silent_downcasting', True)
+
 
 
 class DataAnalitcsHandler:
@@ -33,18 +34,18 @@ class DataAnalitcsHandler:
             df["data"] = pd.to_datetime(df["data"], format="%d/%m/%Y")
             df["valor"] = pd.to_numeric(df["valor"]) / 100
             df = df.rename(columns={"valor": "retorno_cdi"})
+            df = df.sort_values(by="data", ascending=False)
             return df
         else:
             print(f"Erro ao acessar a API do Banco Central: {response.status_code}")
             return None
-
+   
     def get_yahoo_finance_data(self, ticker, start_date, end_date):
         """
         Consulta os dados de cotação de um ticker no Yahoo Finance.
         """
         try:
             print(f"Analisando a variável 'ticker': valor={repr(ticker)}, tipo={type(ticker)}")
-            session = curl_cffi_request.Session(impersonate="chrome110")
             """
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -60,50 +61,43 @@ class DataAnalitcsHandler:
             #session = requests.Session(impersonate=False)
             #print(f"Buscando dados para o ticker: {ticker}")
             df_ticker = yf.download(tickers=ticker,start=start_date,end=end_date,auto_adjust=False,progress=False,threads=True)
+            #df_ticker = self.get_data_with_retry(ticker_str=ticker, start_date=start_date, end_date=end_date)
             # Verificar se o DataFrame está vazio
+
+            # Verificar novamente se o DataFrame está vazio
             if df_ticker.empty:
-                print(f"Sem dados para {ticker}")
+                print("Carregando dados do S3 devido ao erro de limite de requisições...")
+
+                # Inicializar o cliente S3
+                s3_client = boto3.client('s3')
+                bucket_name = "datalake-tc4"
+
+                # Escolher o arquivo correto com base no ticker
+                file_key = "acoes_cotacoes.parquet" if ticker != "^BVSP" else "IBOV.parquet"
+
+                # Baixar o arquivo do S3
+                response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                parquet_file = io.BytesIO(response['Body'].read())
+                df_s3 = pd.read_parquet(parquet_file)
+
+                # Filtrar os dados pelo ticker
                 if ticker != "^BVSP":
-                    print("Carregando dados do S3...")
-                    # Inicializar o cliente S3
-                    s3_client = boto3.client('s3')
-                    bucket_name = "datalake-tc4"
-                    file_key = "acoes_cotacoes.parquet"
+                    # Remover '.SA' do ticker para comparação
+                    ticker_formatado = ticker.replace('.SA', '')
+                    df_ticker = df_s3[df_s3['ticker'] == ticker_formatado]
+                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(500)
+                    df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
+                                            'close', 'high', 'low', 'open', 'volume']]
+                else:
+                    df_ticker = df_s3.sort_values(by='data', ascending=False).head(500)
 
-                    # Baixar o arquivo do S3
-                    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-                    df_s3 = pd.read_parquet(response['Body'])
+                # Ordenar os dados em ordem ascendente
+                df_ticker = df_ticker.sort_values(by='data', ascending=True).head(500)
 
-                    # Filtrar os dados pelo ticker
-                    df_ticker = df_s3[df_s3['ticker'] == ticker]
-
-                    # Ordenar pela data mais recente e pegar os últimos 300 registros
-                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(300)
-
-                    # Verificar se ainda está vazio após o filtro
-                    if df_ticker.empty:
-                        print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
-                        return pd.DataFrame()  # Retorna um DataFrame vazio
-                    
-                elif ticker == "^BVSP":
-                    print("Carregando dados do S3...")
-                    # Inicializar o cliente S3
-                    s3_client = boto3.client('s3')
-                    bucket_name = "datalake-tc4"
-                    file_key = "IBOV.parquet"
-
-                    # Baixar o arquivo do S3
-                    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-                    df_s3 = pd.read_parquet(response['Body'])
-
-                    # Ordenar pela data mais recente e pegar os últimos 300 registros
-                    df_ticker = df_ticker.sort_values(by='data', ascending=False).head(300)
-
-                    # Verificar se ainda está vazio após o filtro
-                    if df_ticker.empty:
-                        print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
-                        return pd.DataFrame()  # Retorna um DataFrame vazio
-
+                # Verificar se ainda está vazio após o filtro
+                if df_ticker.empty:
+                    print(f"Sem dados disponíveis para o ticker {ticker} no arquivo S3.")
+                    return pd.DataFrame()  # Retorna um DataFrame vazio
 
             # Resetar o índice
             df_ticker = df_ticker.reset_index()
@@ -128,16 +122,14 @@ class DataAnalitcsHandler:
 
             # Selecionar as colunas finais
             df_ticker = df_ticker[['data', 'ticker', 'preco_fechamento_ajustado',
-                                'close', 'high', 'low', 'open','volume']]
+                                'close', 'high', 'low', 'open', 'volume']]
 
             return df_ticker
 
-        except Exception as e:
+        except ValueError as e:
             print(f"Erro ao buscar {ticker}: {e}")
-            return pd.DataFrame() 
-
-    
-    
+            
+  
     def cria_data_frame(self):
         def otimizar_tipos(df):
             """
@@ -153,7 +145,7 @@ class DataAnalitcsHandler:
         """
         # Definir período de 60 dias
         end_date = datetime.today()
-        start_date = end_date - timedelta(days=500)
+        start_date = end_date - timedelta(days=1000)
         start_date_str = start_date.strftime("%d/%m/%Y")
         end_date_str = end_date.strftime("%d/%m/%Y")
         #yf.utils.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -162,7 +154,10 @@ class DataAnalitcsHandler:
 
         # Buscar dados do IBOV
         cotacoes_ibov = self.get_yahoo_finance_data("^BVSP", start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d"))
-        cotacoes_ibov = cotacoes_ibov.rename(columns={'preco_fechamento_ajustado': 'fechamento_ibov'})
+        if 'preco_fechamento_ajustado' in cotacoes_ibov.columns:
+            cotacoes_ibov = cotacoes_ibov.rename(columns={'preco_fechamento_ajustado': 'fechamento_ibov'})
+        elif 'fechamento' in cotacoes_ibov.columns:
+            cotacoes_ibov = cotacoes_ibov.rename(columns={'fechamento': 'fechamento_ibov'})
         cotacoes_ibov['pct_ibov'] = cotacoes_ibov['fechamento_ibov'].pct_change()
         cotacoes_ibov = cotacoes_ibov[['data', 'fechamento_ibov', 'pct_ibov']]
 
@@ -170,6 +165,26 @@ class DataAnalitcsHandler:
         cotacoes_cdi = self.get_cdi_history(start_date_str, end_date_str)
         if cotacoes_cdi is None:
             raise Exception("Erro ao buscar os dados do CDI.")
+        cotacoes_acao['data'] = pd.to_datetime(cotacoes_acao['data'], errors='coerce')
+        cotacoes_ibov['data'] = pd.to_datetime(cotacoes_ibov['data'], errors='coerce')
+        cotacoes_cdi['data'] = pd.to_datetime(cotacoes_cdi['data'], errors='coerce')
+        
+        # Ordenar todos os DataFrames em ordem descendente
+        cotacoes_acao = cotacoes_acao.sort_values(by='data', ascending=False)
+        cotacoes_ibov = cotacoes_ibov.sort_values(by='data', ascending=False)
+        cotacoes_cdi = cotacoes_cdi.sort_values(by='data', ascending=False)
+        
+        # Buscar a data mais recente comum entre os DataFrames
+        data_mais_recente = min(
+            cotacoes_acao['data'].max(),
+            cotacoes_ibov['data'].max(),
+            cotacoes_cdi['data'].max()
+        )
+
+        # Filtrar os DataFrames para manter apenas as datas até a data mais recente comum
+        cotacoes_acao = cotacoes_acao[cotacoes_acao['data'] <= data_mais_recente]
+        cotacoes_ibov = cotacoes_ibov[cotacoes_ibov['data'] <= data_mais_recente]
+        cotacoes_cdi = cotacoes_cdi[cotacoes_cdi['data'] <= data_mais_recente]
 
         # Concatenar os dados
         df_merged = pd.merge(cotacoes_acao, cotacoes_ibov, on='data', how='left')
@@ -182,6 +197,9 @@ class DataAnalitcsHandler:
             'data', 'ticker', 'preco_fechamento_ajustado', 'high', 'low', 
             'open', 'volume', 'pct_ibov', 'fechamento_ibov', 'retorno_cdi'
         ]]
+        
+        # Ordenar o DataFrame final em ordem ascendente
+        self.df_dados = self.df_dados.sort_values(by='data', ascending=True)
 
         self.df_dados = otimizar_tipos(self.df_dados)
         
